@@ -15,9 +15,9 @@ import {
   BSocial,
   broadcast,
   signPayload,
-  appPayForRawTx,
   B_PROTOCOL_ADDRESS,
 } from "@/lib/shuallet";
+import { appPayForRawTx } from "@/lib/bsv-sdk-wallet";
 import { bsv, toByteString } from "scrypt-ts";
 import { Progress } from "@/components/ui/progress";
 import ReactMarkdown from "react-markdown";

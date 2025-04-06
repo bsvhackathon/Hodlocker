@@ -11,7 +11,8 @@ import { Progress } from "@/components/ui/progress"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useBSVPrice } from '@/hooks/use-bsv-price'
 import { useBlockHeight } from '@/hooks/use-block-height'
-import { lockLike, payForRawTx, broadcast } from '@/lib/shuallet'
+import { lockLike } from '@/lib/shuallet'
+import { payForRawTx, broadcast } from '@/lib/bsv-sdk-wallet'
 import type { Post as PostType, Like } from '@/app/types/index'
 import { cn } from "@/lib/utils"
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -45,12 +46,22 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import LinkCard from './LinkCard'
 import Image from 'next/image'
 
 import { useInView } from 'react-intersection-observer';
 import dynamic from 'next/dynamic';
 import TwitterEmbed from './embeds/TwitterEmbed';
+import { 
+  AlertDialog, 
+  AlertDialogAction, 
+  AlertDialogCancel, 
+  AlertDialogContent, 
+  AlertDialogDescription, 
+  AlertDialogFooter, 
+  AlertDialogHeader, 
+  AlertDialogTitle, 
+  AlertDialogOverlay
+} from "@/components/ui/alert-dialog"
 
 type PostProps = {
   post: PostType & {
@@ -239,6 +250,8 @@ export const Post = memo(function Post({ post }: PostProps) {
   const [isShowingPubKey, setIsShowingPubKey] = useState(false)
   const [showTipSheet, setShowTipSheet] = useState(false)
   const [tipAmount, setTipAmount] = useState(1) // Amount in USD
+  const [showTipConfirmationDialog, setShowTipConfirmationDialog] = useState(false)
+  const [showLockConfirmationDialog, setShowLockConfirmationDialog] = useState(false)
 
   const { toast } = useToast()
 
@@ -312,7 +325,7 @@ export const Post = memo(function Post({ post }: PostProps) {
   // Update the handleLock function to directly handle locking
   const handleLockClick = async () => {
     // This now directly performs the lock instead of showing confirmation view
-    await handleConfirmLock();
+    await handleOpenLockConfirmation();
   }
 
   // Add the actual lock function
@@ -325,7 +338,7 @@ export const Post = memo(function Post({ post }: PostProps) {
         description: "Please connect your wallet to lock likes",
         duration: 3000
       })
-      setIsLockSheetOpen(false)
+      setShowLockConfirmationDialog(false);
       return
     }
 
@@ -391,8 +404,7 @@ export const Post = memo(function Post({ post }: PostProps) {
       
       // After successful lock, close both sheets and popover
       setTimeout(() => {
-        setIsConfirmView(false)
-        setIsLockSheetOpen(false)  // Close the popover
+        setIsLockSheetOpen(false)
         setSatsAmount('300,000')
         setBlocksToLock('1000')
         setProgress(0)
@@ -448,8 +460,8 @@ export const Post = memo(function Post({ post }: PostProps) {
     setShowTipSheet(true)
   }
 
-  const handleTip = async () => {
-    // Check if wallet is connected
+  const executeTip = async () => {
+    // Check if wallet is connected (redundant check maybe, but safe)
     if (!localStorage.getItem('ownerPublicKey')) {
       toast({
         variant: "destructive",
@@ -457,11 +469,10 @@ export const Post = memo(function Post({ post }: PostProps) {
         description: "Please connect your wallet to send tips",
         duration: 3000
       })
-      setShowTipSheet(false)
-      return
+      setShowTipConfirmationDialog(false); // Ensure dialog is closed on early exit
+      return; 
     }
-
-    // Check if post has wallet_address
+    // Check recipient address (redundant check maybe, but safe)
     if (!post.wallet_address) {
       toast({
         variant: "destructive",
@@ -469,15 +480,15 @@ export const Post = memo(function Post({ post }: PostProps) {
         description: "Post creator's wallet address is missing",
         duration: 3000
       })
-      setShowTipSheet(false)
-      return
+      setShowTipConfirmationDialog(false); // Ensure dialog is closed on early exit
+      return; 
     }
 
     try {
       setIsLocking(true)
       setProgress(25)
 
-      // Calculate amounts using tipAmount with 1% fee
+      // Calculate amounts using tipAmount
       const satsAmount = Math.floor((tipAmount / bsvPrice) * 100000000)
 
       // Create base transaction
@@ -517,26 +528,27 @@ export const Post = memo(function Post({ post }: PostProps) {
 
       setProgress(100)
       
-      setTimeout(() => {
-        setShowTipSheet(false)
-        setProgress(0)
-      }, 500)
+      // Update local cache immediately
+      queryClient.setQueryData(['super-likes', post.txid], (old: any[]) => {
+        return [...(old || []), newSuperLike]
+      })
 
-      // Show success toast
+      // Show success toast AFTER successful cache update
       toast({
         title: "Success!",
         description: "Your gift has been sent successfully",
         duration: 2000
       })
 
-      // Update local cache immediately
-      queryClient.setQueryData(['super-likes', post.txid], (old: any[]) => {
-        return [...(old || []), newSuperLike]
-      })
+      // Reset progress and close the SHEET after a short delay
+      setTimeout(() => {
+        setProgress(0)
+        setShowTipSheet(false); // <-- Close the sheet on success
+      }, 500)
 
     } catch (error: any) {
       console.log('Error sending tip:', error)
-      setProgress(0)
+      setProgress(0) // Reset progress on error
       
       toast({
         variant: "destructive",
@@ -544,11 +556,23 @@ export const Post = memo(function Post({ post }: PostProps) {
         description: error?.message || error?.toString() || "Failed to send gift. Please try again.",
         duration: 5000
       })
+      // Do NOT close the sheet on error, let the user try again or cancel
       
     } finally {
-      setIsLocking(false)
+      setIsLocking(false) // Ensure locking state is always reset
     }
   }
+
+  // This function now just shows the confirmation dialog
+  const handleSendItClick = () => {
+    setShowTipConfirmationDialog(true); 
+  };
+
+  // New function called by the Dialog's Confirm button
+  const handleConfirmTip = () => {
+    setShowTipConfirmationDialog(false); // Close the dialog
+    executeTip(); // Start the actual tipping process (progress shows in sheet)
+  };
 
   // Calculate total directly from post prop
   const totalSuperLikesUSD = post.super_likes?.reduce((sum, like) => sum + (like.usd_amount || 0), 0) || 0
@@ -604,6 +628,22 @@ export const Post = memo(function Post({ post }: PostProps) {
       links: linkMatches.map(match => match[0].replace(/^\[.*?\]\(|\(|\)/g, '').trim())
     };
   }, [post.content]);
+
+  // Renamed: This now just opens the confirmation dialog for locking
+  const handleOpenLockConfirmation = () => {
+     // Basic validation before showing confirmation
+    if (!parseNumberString(satsAmount) || !parseNumberString(blocksToLock) || parseNumberString(satsAmount) <= 0 || parseNumberString(blocksToLock) <= 0) {
+      toast({ variant: "destructive", title: "Invalid Input", description: "Please enter valid amounts and blocks.", duration: 3000 });
+      return;
+    }
+    setShowLockConfirmationDialog(true);
+  };
+
+  // New function called by the Lock Dialog's Confirm button
+  const executeConfirmedLock = () => {
+    setShowLockConfirmationDialog(false); // Close the dialog
+    handleConfirmLock(); // Start the actual locking process
+  };
 
   return (
     <article className="border-b p-2 lg:p-4">
@@ -1145,137 +1185,164 @@ export const Post = memo(function Post({ post }: PostProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Tip Sheet (Super Like Sheet) */}
       <Sheet open={showTipSheet} onOpenChange={setShowTipSheet}>
-        <SheetContent side="bottom" className="w-full md:w-1/3 mx-auto rounded-t-[10px] z-[200]">
-          <SheetHeader> 
+        <SheetContent side="bottom" className="w-full md:w-1/3 mx-auto rounded-t-[10px] z-[50]">
+           <SheetHeader> 
             <SheetTitle className="font-sans text-xl">Super Like</SheetTitle> 
             <SheetDescription className="font-sans"> 
               Send a gift to the post creator! This directly supports them.
             </SheetDescription>
           </SheetHeader>
-          <div className="space-y-5 font-sans mt-4"> 
-            <div className="grid grid-cols-2 gap-2 w-full">
-              {PRESET_AMOUNTS.map((amount) => (
-                <Button
-                  key={amount}
-                  variant="outline"
-                  size="lg"
-                  onClick={() => setTipAmount(amount)}
-                  className={cn(
-                    "font-bold h-16 rounded-xl w-full border-2 transition-colors",
-                    tipAmount === amount 
-                      ? "border-orange-500 text-orange-500 shadow-md" // Changed selected state to orange
-                      : "hover:border-orange-300 dark:hover:border-orange-700 hover:bg-transparent" // Changed hover state to orange
-                  )}
-                >
-                  <div className="flex flex-col items-center">
-                    <div className="text-lg">${amount}</div>
-                    {bsvPrice && (
-                      <div className="text-[10px] opacity-80 font-bold">
-                        {Math.floor(amount / bsvPrice * 100000000).toLocaleString()} sats
-                      </div>
-                    )}
-                  </div>
-                </Button>
-              ))}
-            </div>
+           <div className="space-y-5 font-sans mt-4">
+             <div className="grid grid-cols-2 gap-2 w-full">
+               {PRESET_AMOUNTS.map((amount) => (
+                 <Button
+                   key={amount}
+                   variant="outline"
+                   size="lg"
+                   onClick={() => setTipAmount(amount)}
+                   className={cn(
+                     "font-bold h-16 rounded-xl w-full border-2 transition-colors",
+                     tipAmount === amount 
+                       ? "border-orange-500 text-orange-500 shadow-md" // Changed selected state to orange
+                       : "hover:border-orange-300 dark:hover:border-orange-700 hover:bg-transparent" // Changed hover state to orange
+                   )}
+                 >
+                   <div className="flex flex-col items-center">
+                     <div className="text-lg">${amount}</div>
+                     {bsvPrice && (
+                       <div className="text-[10px] opacity-80 font-bold">
+                         {Math.floor(amount / bsvPrice * 100000000).toLocaleString()} sats
+                       </div>
+                     )}
+                   </div>
+                 </Button>
+               ))}
+             </div>
 
-            <div className="p-5 rounded-xl bg-white dark:bg-blue-950/30 border dark:border-blue-900/30 shadow-sm space-y-4">
-              {/* Adjusted Summary Header */}
-              <div className="pb-3 border-b dark:border-gray-700"> 
-                {/* Restructured Recipient line */}
-                <div className="flex justify-between items-center"> 
-                  <span className="text-sm text-muted-foreground flex items-center gap-1.5"> 
-                    <User className="h-3.5 w-3.5" /> 
-                    Recipient
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <Avatar className="h-6 w-6">
-                      <AvatarImage src={post.profiles?.avatar_url || "/b.jpg"} />
-                      <AvatarFallback>B</AvatarFallback>
-                    </Avatar>
-                    <span className="font-medium text-foreground text-sm">
-                      {post.profiles?.username || formatPublicKeyWithEllipsis(post.owner_public_key)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground flex items-center gap-1.5">
-                  <DollarSign className="h-3.5 w-3.5" />
-                  Super Like Amount
-                </span>
-                <div className="text-right">
-                  <div className={cn(
-                    "font-medium text-foreground transition-all duration-300",
-                    prevSatsAmount !== Math.floor((tipAmount / bsvPrice) * 100000000) && "animate-fade-up"
-                  )}>
-                    {bsvPrice ? (
-                      <span 
-                        key={tipAmount} // Force re-render on amount change
-                        onAnimationEnd={() => setPrevSatsAmount(Math.floor((tipAmount / bsvPrice) * 100000000))}
-                        className="text-foreground dark:text-white"
-                      >
-                        ${tipAmount.toFixed(2)} USD
-                      </span>
-                    ) : '...'}
-                  </div>
-                  <div className="text-xs text-muted-foreground dark:text-gray-400">
-                    {bsvPrice ? Math.floor(tipAmount / bsvPrice * 100000000).toLocaleString() : '...'} sats
-                  </div>
-                </div>
-              </div>
+             <div className="p-5 rounded-xl bg-white dark:bg-blue-950/30 border dark:border-blue-900/30 shadow-sm space-y-4">
+               {/* Adjusted Summary Header */}
+               <div className="pb-3 border-b dark:border-gray-700"> 
+                 {/* Restructured Recipient line */}
+                 <div className="flex justify-between items-center"> 
+                   <span className="text-sm text-muted-foreground flex items-center gap-1.5"> 
+                     <User className="h-3.5 w-3.5" /> 
+                     Recipient
+                   </span>
+                   <div className="flex items-center gap-1.5">
+                     <Avatar className="h-6 w-6">
+                       <AvatarImage src={post.profiles?.avatar_url || "/b.jpg"} />
+                       <AvatarFallback>B</AvatarFallback>
+                     </Avatar>
+                     <span className="font-medium text-foreground text-sm">
+                       {post.profiles?.username || formatPublicKeyWithEllipsis(post.owner_public_key)}
+                     </span>
+                   </div>
+                 </div>
+               </div>
+               
+               <div className="flex justify-between items-center">
+                 <span className="text-sm text-muted-foreground flex items-center gap-1.5">
+                   <DollarSign className="h-3.5 w-3.5" />
+                   Super Like Amount
+                 </span>
+                 <div className="text-right">
+                   <div className={cn(
+                     "font-medium text-foreground transition-all duration-300",
+                     prevSatsAmount !== Math.floor((tipAmount / bsvPrice) * 100000000) && "animate-fade-up"
+                   )}>
+                     {bsvPrice ? (
+                       <span 
+                         key={tipAmount} // Force re-render on amount change
+                         onAnimationEnd={() => setPrevSatsAmount(Math.floor((tipAmount / bsvPrice) * 100000000))}
+                         className="text-foreground dark:text-white"
+                       >
+                         ${tipAmount.toFixed(2)} USD
+                       </span>
+                     ) : '...'}
+                   </div>
+                   <div className="text-xs text-muted-foreground dark:text-gray-400">
+                     {bsvPrice ? Math.floor(tipAmount / bsvPrice * 100000000).toLocaleString() : '...'} sats
+                   </div>
+                 </div>
+               </div>
 
-              
-            </div>
+               
+             </div>
 
-            {/* Add disclaimer text */}
-            <div className="text-xs text-muted-foreground mt-2 pt-2 border-t font-sans">
-              <p>You're sending a Super Like directly to the creator. This action cannot be undone.</p>
-            </div>
+             {/* Add disclaimer text */}
+             <div className="text-xs text-muted-foreground mt-2 pt-2 border-t font-sans">
+               <p>You're sending a Super Like directly to the creator. This action cannot be undone.</p>
+             </div>
 
-            <div className="flex justify-end gap-2">
+             <div className="flex justify-end gap-2">
               <Button 
                 variant="outline" 
-                onClick={() => setShowTipSheet(false)}
+                onClick={() => setShowTipSheet(false)} // Cancel button still closes sheet
                 disabled={isLocking}
                 className="font-medium"
               >
                 Cancel
               </Button>
               <Button 
-                onClick={handleTip} 
-                disabled={isLocking}
-                // Updated button styling to solid orange
+                onClick={handleSendItClick} // Opens the confirmation dialog
+                disabled={isLocking} 
                 className="min-w-[120px] font-bold bg-orange-500 hover:bg-orange-600 text-white dark:text-white shadow-md border-0" 
               >
-                {isLocking ? (
-                  <>
-                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                    Sending
-                  </>
-                ) : (
-                  <>
-                    Send It
-                  </>
-                )}
+                {/* Text doesn't need to change based on isLocking here */}
+                Send It 
               </Button>
             </div>
 
-            {isLocking && (
+            {/* Progress bar remains in the sheet */}
+            {isLocking && ( 
               <Progress 
                 value={progress} 
                 className="h-1.5 transition-all bg-muted"
               />
             )}
-          </div>
+           </div>
         </SheetContent>
       </Sheet>
 
+      {/* Tip Confirmation Dialog */}
+       <AlertDialog open={showTipConfirmationDialog} onOpenChange={setShowTipConfirmationDialog}>
+         {/* Overlay has z-index 55 */}
+        <AlertDialogOverlay className="bg-black/60 z-[55]" />
+         {/* Content has z-index 60 (higher than overlay and sheet) */}
+        <AlertDialogContent className="z-[60]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Super Like</AlertDialogTitle>
+             <AlertDialogDescription>
+              You are about to send a Super Like of 
+              <strong className="text-foreground"> ${tipAmount.toFixed(2)} USD </strong> 
+              ({bsvPrice ? Math.floor(tipAmount / bsvPrice * 100000000).toLocaleString() : '...'} sats) to 
+              <strong className="text-foreground"> {post.profiles?.username || formatPublicKeyWithEllipsis(post.owner_public_key)}</strong>. 
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+             {/* Cancel closes the dialog only */}
+            <AlertDialogCancel onClick={() => setShowTipConfirmationDialog(false)} disabled={isLocking}> 
+              Cancel
+            </AlertDialogCancel>
+            {/* Action closes the dialog and starts the tip */}
+            <AlertDialogAction 
+              onClick={handleConfirmTip} 
+              disabled={isLocking}
+              className="bg-orange-500 hover:bg-orange-600" 
+            >
+              {/* Button text remains simple as progress is shown elsewhere */}
+              Confirm & Send
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Add this Sheet component */}
       <Sheet open={isLockSheetOpen} onOpenChange={setIsLockSheetOpen}>
-        <SheetContent side="bottom" className="w-full md:w-1/3 mx-auto rounded-t-[10px] z-[200]">
+        <SheetContent side="bottom" className="w-full md:w-1/3 mx-auto rounded-t-[10px] z-[50]">
           <SheetHeader>
             {/* Apply font-sans to the SheetTitle */}
             <SheetTitle className="flex items-center gap-2 font-sans"> 
@@ -1405,18 +1472,12 @@ export const Post = memo(function Post({ post }: PostProps) {
                 Cancel
               </Button>
               <Button 
-                onClick={handleLockClick} 
+                onClick={handleOpenLockConfirmation} // <-- Opens the confirmation dialog
                 disabled={isLocking || !parseNumberString(satsAmount) || !parseNumberString(blocksToLock)}
                 className="min-w-[100px]"
               >
-                {isLocking ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Locking
-                  </>
-                ) : (
-                  'Confirm Lock'
-                )}
+                {/* Button text doesn't need locking state */}
+                Confirm Lock 
               </Button>
             </div>
 
@@ -1429,6 +1490,35 @@ export const Post = memo(function Post({ post }: PostProps) {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Lock Confirmation Dialog */}
+      <AlertDialog open={showLockConfirmationDialog} onOpenChange={setShowLockConfirmationDialog}>
+        <AlertDialogOverlay className="bg-black/60 z-[55]" />
+        <AlertDialogContent className="z-[60]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Lock Details</AlertDialogTitle>
+            <AlertDialogDescription>
+               You are about to lock
+               <strong className="text-foreground"> {formatNumberWithCommas(satsAmount || '0')} sats </strong>
+               ({formatUSD(parseNumberString(satsAmount || '0'), bsvPrice)}) for
+               <strong className="text-foreground"> {formatNumberWithCommas(blocksToLock || '0')} blocks </strong>
+               ({formatBlocksToTime(parseNumberString(blocksToLock || '0'))}).
+               This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowLockConfirmationDialog(false)} disabled={isLocking}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={executeConfirmedLock}
+              disabled={isLocking}
+            >
+              Confirm & Lock
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </article>
   )
 })

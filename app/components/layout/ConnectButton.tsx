@@ -14,8 +14,10 @@ import { Label } from "@/components/ui/label"
 
 import { useToast } from "@/hooks/use-toast"
 
-// Add these imports from shuallet
-import { getWalletBalance, newPK, restoreWallet, sendBSV, signLoginMessage } from '@/lib/shuallet'
+// Add these imports from shuallet (keep those not in bsv-sdk-wallet)
+import { signLoginMessage } from '@/lib/shuallet'
+// Add imports for functions now in bsv-sdk-wallet
+import { newPK, restoreWallet, getWalletBalance, sendBSV } from '@/lib/bsv-sdk-wallet'
 import { createPasskey, getPasskey, isPasskeyAvailable, getPasskeys, removePasskey } from '@/lib/passkeys';
 import { useBlockHeight } from "@/hooks/use-block-height"
 

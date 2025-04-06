@@ -48,7 +48,7 @@ export async function signLoginMessage(blockHeight: number) {
       signature: signature.toString(),
       blockHeight
     }
-  } 
+} 
 
 export const createLockOutput = (address: string, blockHeight: number, satoshis: number, templateRawTx?: string): string => {
     let bsvtx;

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Search } from "lucide-react"
 import { useState, useEffect, useTransition } from 'react'
-import { useDebounce } from '@/app/hooks/useDebounce'
+import { useDebounce } from '@/hooks/useDebounce'
 import { cn } from "@/lib/utils"
 
 export default function SearchInput({ initialSearchTerm = '' }) {
